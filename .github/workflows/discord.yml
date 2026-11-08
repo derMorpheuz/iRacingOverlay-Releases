@@ -1,0 +1,63 @@
+# Postet jedes neue Release als Nachricht im Release-Stil in Discord:
+#   Titel "[iRacingOverlay] Neues Update: Version X" (Link zum Release), darunter "Neu in X" mit den Punkten,
+#   Fußzeile "Racecraft by derMorpheuz".
+# Die Discord-Adresse liegt als Geheimnis DISCORD_WEBHOOK in den Repo-Einstellungen (nie in Dateien).
+# Von Hand starten (z. B. zum Testen): Actions > Discord > Run workflow, optional mit Tag (leer = neuestes Release).
+name: Discord
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release-Tag (leer = neuestes)"
+        required: false
+        default: ""
+
+jobs:
+  post:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Nachricht an Discord
+        env:
+          WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+          REPO: ${{ github.repository }}
+          TAG: ${{ github.event.release.tag_name || inputs.tag }}
+        run: |
+          python3 - <<'PY'
+          import json, os, urllib.request
+
+          repo, tag = os.environ["REPO"], os.environ.get("TAG") or ""
+          api = f"https://api.github.com/repos/{repo}/releases/" + (f"tags/{tag}" if tag else "latest")
+          rel = json.load(urllib.request.urlopen(urllib.request.Request(api, headers={"User-Agent": "race-overlay-discord"})))
+
+          lines = []
+          for raw in (rel.get("body") or "").replace("\r", "").split("\n"):
+              t = raw.strip()
+              if not t:
+                  continue
+              if t.startswith(("- ", "* ", "• ")):
+                  lines.append("• " + t[2:].strip())
+              else:  # Überschriften wie "Neu in 0.9.0" oder "Behoben"
+                  lines.append(("\n" if lines else "") + f"**{t}**")
+          desc = "\n".join(lines) or "Neue Version verfügbar."
+          if len(desc) > 3900:
+              desc = desc[:3900].rsplit("\n", 1)[0] + "\n…"
+
+          name = rel.get("name") or rel.get("tag_name", "")
+          payload = {
+              "username": "Race Overlay",
+              "embeds": [{
+                  "title": f"[iRacingOverlay] Neues Update: {name}",
+                  "url": rel.get("html_url"),
+                  "description": desc,
+                  "color": 0xF2D400,
+                  "footer": {"text": "Racecraft by derMorpheuz"},
+                  "timestamp": rel.get("published_at"),
+              }],
+          }
+          req = urllib.request.Request(os.environ["WEBHOOK"], data=json.dumps(payload).encode(),
+                                       headers={"Content-Type": "application/json", "User-Agent": "race-overlay-discord"})
+          print("Discord:", urllib.request.urlopen(req).status)
+          PY
