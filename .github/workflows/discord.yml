@@ -24,13 +24,25 @@ jobs:
           WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
           REPO: ${{ github.repository }}
           TAG: ${{ github.event.release.tag_name || inputs.tag }}
+          # Angemeldet abfragen: ohne Token teilt sich der Runner das kleine Limit (60/h je IP) mit anderen -> HTTP 403
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           python3 - <<'PY'
-          import json, os, urllib.request
+          import json, os, time, urllib.error, urllib.request
 
           repo, tag = os.environ["REPO"], os.environ.get("TAG") or ""
           api = f"https://api.github.com/repos/{repo}/releases/" + (f"tags/{tag}" if tag else "latest")
-          rel = json.load(urllib.request.urlopen(urllib.request.Request(api, headers={"User-Agent": "race-overlay-discord"})))
+          hdr = {"User-Agent": "race-overlay-discord", "Accept": "application/vnd.github+json"}
+          if os.environ.get("GH_TOKEN"):
+              hdr["Authorization"] = "Bearer " + os.environ["GH_TOKEN"]
+          for attempt in range(4):  # kurzzeitige Fehler (403/429/5xx) mit Pause erneut versuchen
+              try:
+                  rel = json.load(urllib.request.urlopen(urllib.request.Request(api, headers=hdr)))
+                  break
+              except urllib.error.HTTPError as e:
+                  if attempt == 3 or e.code not in (403, 429, 500, 502, 503, 504):
+                      raise
+                  time.sleep(15 * (attempt + 1))
 
           lines = []
           for raw in (rel.get("body") or "").replace("\r", "").split("\n"):
